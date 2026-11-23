@@ -21,7 +21,7 @@ if 'KEYSTORE_PATH' not in s:
     if 'buildTypes {' in s: s=s.replace('buildTypes {',sc+'    buildTypes {',1)
     else: print('WARN: buildTypes not found, signing not patched')
     s=re.sub(r'(buildTypes\s*\{\s*release\s*\{)',r'\1\n            if (System.getenv("KEYSTORE_PATH")) { signingConfig signingConfigs.release }',s,count=1)
-    s=re.sub(r'versionCode\s+\d+','versionCode (System.getenv("VERSION_CODE") ?: "1").toInteger()',s,count=1)
+    s=re.sub(r'versionCode\s+\d+','versionCode Integer.parseInt(System.getenv("VERSION_CODE") ?: "1")',s,count=1)
     io.open(p,'w',encoding='utf-8').write(s);print('patched build.gradle')
 PY
 echo "Android patched (portrait + signing + versionCode)."
