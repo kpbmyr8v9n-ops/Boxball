@@ -1,0 +1,156 @@
+name: Build Android (APK + AAB)
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_aab:
+        description: "Also build the AAB (Google Play bundle)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      VERSION_CODE: ${{ github.run_number }}
+      HAS_KEYSTORE: ${{ secrets.KEYSTORE_B64 != '' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Works with ANY repo layout: files in their proper folders (www/, scripts/, assets/),
+      # inside a sub-folder, or all uploaded loose at the top level. It rebuilds a clean
+      # project in "_app" so nothing in your repository has to be moved.
+      - name: Assemble the project
+        id: asm
+        run: |
+          set -e
+          PKG=$(find . -name package.json -not -path '*/node_modules/*' -not -path './_app/*' -print0 \
+                | xargs -0 grep -l '"@capacitor/core"' 2>/dev/null | head -n 1 || true)
+          if [ -z "$PKG" ]; then
+            echo "::error::No Capacitor package.json found in the repository. Contents:"
+            find . -maxdepth 3 -not -path './.git/*' | sort | head -80
+            exit 1
+          fi
+          SRC=$(dirname "$PKG")
+          APP="$GITHUB_WORKSPACE/_app"
+          echo "Source folder: $SRC"
+          rm -rf "$APP"; mkdir -p "$APP"
+          MISSING=0
+          pick() { # pick <file name> <destination folder in project> <required|optional>
+            local name="$1" dest="$2" need="$3" f=""
+            if [ -f "$SRC/$dest/$name" ]; then f="$SRC/$dest/$name"
+            elif [ -f "$SRC/$name" ]; then f="$SRC/$name"
+            else f=$(find . -type f -name "$name" -not -path '*/node_modules/*' -not -path './_app/*' -not -path './.git/*' -not -path '*/android/*' -not -path '*/ios/*' | head -n 1)
+            fi
+            if [ -z "$f" ]; then
+              if [ "$need" = required ]; then echo "::error::Required file not found anywhere in the repository: $name"; MISSING=1
+              else echo "::warning::Optional file not found: $name"; fi
+              return 0
+            fi
+            mkdir -p "$APP/$dest"; cp "$f" "$APP/$dest/$name"; echo "  $dest/$name  <-  $f"
+          }
+          pick package.json . required
+          pick capacitor.config.json . required
+          pick patch-android.sh scripts required
+          pick patch-ios.sh scripts optional
+          pick build-android.sh scripts optional
+          pick index.html www required
+          pick manifest.webmanifest www optional
+          pick sw.js www optional
+          pick icon-180.png www/icons optional
+          pick icon-192.png www/icons optional
+          pick icon-512.png www/icons optional
+          pick maskable-512.png www/icons optional
+          pick icon-only.png assets required
+          pick icon-foreground.png assets required
+          pick icon-background.png assets required
+          pick splash.png assets required
+          pick splash-dark.png assets optional
+          if [ "$MISSING" = 1 ]; then
+            echo "::error::Some required game files are missing from the repository (see above). Upload them and run again."
+            exit 1
+          fi
+          echo "dir=$APP" >> "$GITHUB_OUTPUT"
+          find "$APP" -type f | sort
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Android SDK 36
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools platforms;android-36 build-tools;36.0.0"
+
+      - name: Install npm dependencies
+        working-directory: ${{ steps.asm.outputs.dir }}
+        run: npm install
+
+      - name: Create Android platform (Capacitor 8)
+        working-directory: ${{ steps.asm.outputs.dir }}
+        run: npx cap add android
+
+      - name: Patch Android project (portrait lock, signing, versionCode)
+        working-directory: ${{ steps.asm.outputs.dir }}
+        run: bash scripts/patch-android.sh
+
+      - name: Generate app icons and splash screens
+        working-directory: ${{ steps.asm.outputs.dir }}
+        run: npx capacitor-assets generate --android
+
+      - name: Sync web assets into Android project
+        working-directory: ${{ steps.asm.outputs.dir }}
+        run: npx cap sync android
+
+      - name: Prepare release keystore (only if secrets are set)
+        if: env.HAS_KEYSTORE == 'true'
+        run: |
+          echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "KEYSTORE_PASSWORD=${{ secrets.KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "KEY_ALIAS=${{ secrets.KEY_ALIAS }}" >> "$GITHUB_ENV"
+          echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> "$GITHUB_ENV"
+
+      # ---- APK (priority): debug-signed, installs directly on any Android phone ----
+      - name: Build debug APK
+        working-directory: ${{ steps.asm.outputs.dir }}/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-shatter-apk
+          path: _app/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # ---- AAB (best effort): never fails the run, the APK is already uploaded ----
+      - name: Build release AAB
+        if: ${{ inputs.build_aab }}
+        continue-on-error: true
+        working-directory: ${{ steps.asm.outputs.dir }}/android
+        run: ./gradlew bundleRelease --stacktrace
+
+      - name: Upload AAB
+        if: ${{ inputs.build_aab }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: neon-shatter-aab
+          path: _app/android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: warn
+          retention-days: 30
