@@ -3,6 +3,9 @@
 set -e
 M=android/app/src/main/AndroidManifest.xml
 grep -q screenOrientation "$M" || sed -i 's|<activity|<activity android:screenOrientation="portrait"|' "$M"
+# AdMob app ID (Google TEST id by default; set ADMOB_APP_ID secret/env for real ads)
+ADMOB_APP_ID="${ADMOB_APP_ID:-ca-app-pub-3940256099942544~3347511713}"
+grep -q com.google.android.gms.ads.APPLICATION_ID "$M" || sed -i "s|</application>|<meta-data android:name=\"com.google.android.gms.ads.APPLICATION_ID\" android:value=\"$ADMOB_APP_ID\"/></application>|" "$M"
 python3 - <<'PY'
 import re,io
 p='android/app/build.gradle';s=io.open(p,encoding='utf-8').read()
