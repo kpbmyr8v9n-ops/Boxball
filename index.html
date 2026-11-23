@@ -45,7 +45,22 @@ sfx.combo=lv=>{for(let i=0;i<lv+1;i++)tone(440*Math.pow(1.25,i),.15,'triangle',.
 const NT=[0,3,7,12,10,7,3,7],RT=[110,87,98,82];let mi=0;
 setInterval(()=>{if(!AC||document.hidden)return;mi++;const r=RT[(mi>>5)%4]*Math.pow(2,NT[mi%8]/12);tone(r*2,.16,'triangle',.03,0,1);if(mi%4==0)tone(r/2,.45,'sine',.06,0,1)},180);
 // monetization hooks: swap these stubs for real SDKs. Gameplay never depends on them.
-const Ads={rewarded(done){const d=$('#dl');d.innerHTML='<div class="card" style="flex-direction:column;text-align:center"><b>📺 Sample reward video</b><small>A real, optional rewarded ad would play here.</small><div style="display:flex;gap:10px"><button class="b sm p" onclick="$(\'#dl\').classList.remove(\'on\')">Skip</button><button class="b sm l" id="adok">Finish</button></div></div>';d.classList.add('on');$('#adok').onclick=()=>{d.classList.remove('on');done()}}};
+const AdsSim={rewarded(done){const d=$('#dl');d.innerHTML='<div class="card" style="flex-direction:column;text-align:center"><b>📺 Sample reward video</b><small>A real, optional rewarded ad would play here.</small><div style="display:flex;gap:10px"><button class="b sm p" onclick="$(\'#dl\').classList.remove(\'on\')">Skip</button><button class="b sm l" id="adok">Finish</button></div></div>';d.classList.add('on');$('#adok').onclick=()=>{d.classList.remove('on');done()}}};
+const Ads={cfg:{test:true,rewarded:'ca-app-pub-3940256099942544/5224354917'},ok:0,rd:0,ld:0,busy:0,
+msg(t){const d=$('#dl');d.innerHTML='<div class="card" style="flex-direction:column;text-align:center"><b>'+t+'</b><button class="b sm l" onclick="$(\'#dl\').classList.remove(\'on\')">OK</button></div>';d.classList.add('on')},
+get P(){try{return window.Capacitor&&Capacitor.isNativePlatform&&Capacitor.isNativePlatform()&&Capacitor.Plugins&&Capacitor.Plugins.AdMob||null}catch(e){return null}},
+async init(){const A=this.P;if(!A||this.ok)return;try{await A.initialize({initializeForTesting:this.cfg.test});try{const c=await A.requestConsentInfo();if(c&&c.isConsentFormAvailable&&c.status==='REQUIRED')await A.showConsentForm()}catch(e){}this.ok=1;this.load()}catch(e){}},
+async load(){const A=this.P;if(!A||!this.ok||this.ld||this.rd)return;this.ld=1;try{await A.prepareRewardVideoAd({adId:this.cfg.rewarded,isTesting:this.cfg.test});this.rd=1}catch(e){this.rd=0}this.ld=0},
+async rewarded(done){const A=this.P;if(!A)return AdsSim.rewarded(done);if(this.busy)return;
+ if(!this.ok)await this.init();if(!this.rd)await this.load();
+ if(!this.rd){this.msg('No video is available right now. Please try again in a moment.');return}
+ this.busy=1;this.rd=0;let got=0;const hs=[];
+ const reward=()=>{if(got)return;got=1;done()};
+ const end=()=>{if(!this.busy)return;this.busy=0;clearTimeout(to);hs.forEach(h=>{try{h.remove()}catch(e){}});this.load();if(!got)this.msg('Watch the whole video to get the reward.')};
+ const on=(n,f)=>{try{const p=A.addListener(n,f);if(p&&p.then)p.then(h=>hs.push(h));else if(p)hs.push(p)}catch(e){}};
+ const to=setTimeout(end,120000);
+ on('onRewardedVideoAdReward',reward);on('onRewardedVideoAdDismissed',()=>setTimeout(end,1500));on('onRewardedVideoAdFailedToShow',()=>setTimeout(end,300));
+ try{await A.showRewardVideoAd();reward()}catch(e){if(!got)setTimeout(end,1500)}}};
 const IAP={/* future: buy(skuId) for cosmetic ball skins */};
 // ---- layout
 const cv=$('#g'),cx=cv.getContext('2d');let dpr,s,vw,vh,ox,cs,gx0,gy0=76,dy0,Fy,ax0,ax1;
@@ -197,5 +212,5 @@ addEventListener('pagehide',save);addEventListener('visibilitychange',()=>{if(do
 let la=performance.now();function loop(n){const dt=Math.min((n-la)/1000,.033);la=n;T+=dt;sh*=.87;if(mode=='play'&&G)upd(dt);
  for(const p of FX){p.t-=dt;if(p.s){p.y+=p.vy*dt}else if(!p.ring){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=p.g*dt}}FX=FX.filter(p=>p.t>0);draw();requestAnimationFrame(loop)}
 if('serviceWorker' in navigator&&/^https?:/.test(location.protocol)&&!window.Capacitor)navigator.serviceWorker.register('sw.js').catch(()=>{});
-addEventListener('pointerdown',au);menu();requestAnimationFrame(loop);
+addEventListener('pointerdown',au);menu();Ads.init();requestAnimationFrame(loop);
 </script></body></html>
